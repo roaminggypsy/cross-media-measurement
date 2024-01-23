@@ -53,6 +53,8 @@ import org.wfanet.measurement.api.v2alpha.CertificatesGrpcKt.CertificatesCorouti
 import org.wfanet.measurement.api.v2alpha.CreateEventGroupMetadataDescriptorRequest
 import org.wfanet.measurement.api.v2alpha.CreateEventGroupRequest
 import org.wfanet.measurement.api.v2alpha.DataProviderCertificateKey
+import org.wfanet.measurement.api.v2alpha.DataProvidersGrpcKt.DataProvidersCoroutineImplBase
+import org.wfanet.measurement.api.v2alpha.DataProvidersGrpcKt.DataProvidersCoroutineStub
 import org.wfanet.measurement.api.v2alpha.DuchyCertificateKey
 import org.wfanet.measurement.api.v2alpha.DuchyKey
 import org.wfanet.measurement.api.v2alpha.EventGroup
@@ -75,6 +77,7 @@ import org.wfanet.measurement.api.v2alpha.MeasurementSpecKt.vidSamplingInterval
 import org.wfanet.measurement.api.v2alpha.ProtocolConfig
 import org.wfanet.measurement.api.v2alpha.ProtocolConfigKt
 import org.wfanet.measurement.api.v2alpha.RefuseRequisitionRequest
+import org.wfanet.measurement.api.v2alpha.ReplaceDataAvailabilityIntervalRequest
 import org.wfanet.measurement.api.v2alpha.Requisition
 import org.wfanet.measurement.api.v2alpha.Requisition.Refusal
 import org.wfanet.measurement.api.v2alpha.RequisitionFulfillmentGrpcKt.RequisitionFulfillmentCoroutineImplBase
@@ -92,6 +95,7 @@ import org.wfanet.measurement.api.v2alpha.UpdateEventGroupMetadataDescriptorRequ
 import org.wfanet.measurement.api.v2alpha.UpdateEventGroupRequest
 import org.wfanet.measurement.api.v2alpha.certificate
 import org.wfanet.measurement.api.v2alpha.copy
+import org.wfanet.measurement.api.v2alpha.dataProvider
 import org.wfanet.measurement.api.v2alpha.differentialPrivacyParams
 import org.wfanet.measurement.api.v2alpha.elGamalPublicKey
 import org.wfanet.measurement.api.v2alpha.eventGroup
@@ -237,6 +241,13 @@ class EdpSimulatorTest {
       }
       .thenReturn(DATA_PROVIDER_RESULT_CERTIFICATE)
   }
+  private val dataProvidersServiceMock: DataProvidersCoroutineImplBase = mockService {
+    onBlocking { replaceDataAvailabilityInterval(any()) }
+      .thenAnswer {
+        val request = it.arguments[0] as ReplaceDataAvailabilityIntervalRequest
+        dataProvider { dataAvailabilityInterval = request.dataAvailabilityInterval }
+      }
+  }
   private val measurementConsumersServiceMock:
     MeasurementConsumersGrpcKt.MeasurementConsumersCoroutineImplBase =
     mockService {
@@ -279,6 +290,7 @@ class EdpSimulatorTest {
   val grpcTestServerRule = GrpcTestServerRule {
     addService(measurementConsumersServiceMock)
     addService(certificatesServiceMock)
+    addService(dataProvidersServiceMock)
     addService(eventGroupsServiceMock)
     addService(eventGroupMetadataDescriptorsServiceMock)
     addService(requisitionsServiceMock)
@@ -291,6 +303,10 @@ class EdpSimulatorTest {
 
   private val certificatesStub: CertificatesCoroutineStub by lazy {
     CertificatesCoroutineStub(grpcTestServerRule.channel)
+  }
+
+  private val dataProvidersStub: DataProvidersCoroutineStub by lazy {
+    DataProvidersCoroutineStub(grpcTestServerRule.channel)
   }
 
   private val eventGroupsStub: EventGroupsCoroutineStub by lazy {
@@ -337,6 +353,7 @@ class EdpSimulatorTest {
         MEASUREMENT_CONSUMER_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -403,6 +420,7 @@ class EdpSimulatorTest {
         MEASUREMENT_CONSUMER_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -453,6 +471,7 @@ class EdpSimulatorTest {
         MEASUREMENT_CONSUMER_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -483,6 +502,7 @@ class EdpSimulatorTest {
         MEASUREMENT_CONSUMER_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -543,6 +563,7 @@ class EdpSimulatorTest {
         MEASUREMENT_CONSUMER_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -603,6 +624,7 @@ class EdpSimulatorTest {
         "measurementConsumers/differentMcId",
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -701,6 +723,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -830,6 +853,7 @@ class EdpSimulatorTest {
           MC_NAME,
           measurementConsumersStub,
           certificatesStub,
+          dataProvidersStub,
           eventGroupsStub,
           eventGroupMetadataDescriptorsStub,
           requisitionsStub,
@@ -978,6 +1002,7 @@ class EdpSimulatorTest {
           MC_NAME,
           measurementConsumersStub,
           certificatesStub,
+          dataProvidersStub,
           eventGroupsStub,
           eventGroupMetadataDescriptorsStub,
           requisitionsStub,
@@ -1084,6 +1109,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1141,6 +1167,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1200,6 +1227,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1270,6 +1298,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1337,6 +1366,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1404,6 +1434,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1469,6 +1500,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1534,6 +1566,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1599,6 +1632,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1664,6 +1698,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1726,6 +1761,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1782,6 +1818,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1872,6 +1909,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -1938,6 +1976,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -2001,6 +2040,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -2058,6 +2098,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -2122,6 +2163,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -2183,6 +2225,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -2244,6 +2287,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,
@@ -2306,6 +2350,7 @@ class EdpSimulatorTest {
         MC_NAME,
         measurementConsumersStub,
         certificatesStub,
+        dataProvidersStub,
         eventGroupsStub,
         eventGroupMetadataDescriptorsStub,
         requisitionsStub,

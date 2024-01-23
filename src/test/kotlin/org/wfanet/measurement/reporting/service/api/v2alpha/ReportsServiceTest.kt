@@ -551,8 +551,8 @@ class ReportsServiceTest {
   fun `createReport returns report with two metrics when multiple filters`() = runBlocking {
     val targetReportingSet = PRIMITIVE_REPORTING_SETS.first()
 
-    val predicates1 = listOf("gender == MALE", "gender == FEMALE")
-    val predicates2 = listOf("age == 18_34", "age == 55_PLUS")
+    val predicates1 = listOf("gender == 1", "gender == 2")
+    val predicates2 = listOf("age == 1", "age == 2")
 
     val groupingsCartesianProduct: List<List<String>> =
       predicates1.flatMap { filter1 -> predicates2.map { filter2 -> listOf(filter1, filter2) } }
@@ -898,8 +898,8 @@ class ReportsServiceTest {
         )
 
       // Groupings
-      val predicates1 = listOf("gender == MALE", "gender == FEMALE")
-      val predicates2 = listOf("age == 18_34", "age == 55_PLUS")
+      val predicates1 = listOf("gender == 1", "gender == 2")
+      val predicates2 = listOf("age == 1", "age == 2")
 
       val internalMetricCalculationSpec = internalMetricCalculationSpec {
         externalMetricCalculationSpecId = "1234"
