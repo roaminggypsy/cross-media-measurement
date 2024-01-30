@@ -6,7 +6,7 @@ on:
 jobs:
   terraform:
     uses: ./.github/workflows/terraform-cmms.yml
-    secrets: inheAdrit
+    secrets: inherit
     with:
       environment: dev
       apply: true
