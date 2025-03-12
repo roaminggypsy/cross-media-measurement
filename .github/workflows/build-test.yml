@@ -104,6 +104,11 @@ jobs:
         id: run-non-kotlin-tests
         run: bazel test -- //... -//src/test/kotlin/...
 
+      # WIP (remove?)
+      - name: Run clean
+        id: run-clean
+        run: bazel clean
+
       # TODO(@laureanobrs): add python and cc coverage
       # If the coverage fails due to a Jacoco issue, adjust the exclusion filter (see https://github.com/world-federation-of-advertisers/cross-media-measurement/blob/main/docs/kotlin-code-coverage.md#developer-guidelines-for-handling-jacoco-issues).
       - name: Run kotlin tests with coverage
