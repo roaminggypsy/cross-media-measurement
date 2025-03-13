@@ -178,16 +178,20 @@ class ReportsService(
             for (metricCalculationSpecReportingMetrics in
               reportingMetricEntry.value.metricCalculationSpecReportingMetricsList) {
               for (reportingMetric in metricCalculationSpecReportingMetrics.reportingMetricsList) {
-                val name =
-                  MetricKey(
+                if (reportingMetric.externalMetricId.isEmpty()) {
+                  println("Missing metric id for report ${internalReport.externalReportId}")
+                } else {
+                  val name =
+                    MetricKey(
                       internalReport.cmmsMeasurementConsumerId,
                       reportingMetric.externalMetricId,
                     )
-                    .toName()
+                      .toName()
 
-                if (!contains(name)) {
-                  emit(name)
-                  add(name)
+                  if (!contains(name)) {
+                    emit(name)
+                    add(name)
+                  }
                 }
               }
             }
