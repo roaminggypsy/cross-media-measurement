@@ -25,11 +25,9 @@ bazel_dep(
     version = "0.6.0",
     repo_name = "wfa_rules_kotlin_jvm",
 )
-archive_override(
-    module_name = "rules_kotlin_jvm",
-    integrity = "sha256-BCpLRrRIqG6/rZzreHsFMsO/HQkYL4KKB+1fZUJ0VRg=",
-    strip_prefix = "rules_kotlin_jvm-laureanobrs-update-java-rules",
-    urls = ["https://github.com/world-federation-of-advertisers/rules_kotlin_jvm/archive/refs/heads/laureanobrs-update-java-rules.zip"],
+local_path_override(
+    module_name = "rules_kotlin",
+    path = "./third/rules_kotlin",
 )
 bazel_dep(
     name = "rules_swig",
@@ -136,7 +134,7 @@ bazel_dep(
 )
 bazel_dep(
     name = "rules_java",
-    version = "8.7.1",
+    version = "8.11.0",
 )
 bazel_dep(
     name = "rules_jvm_external",

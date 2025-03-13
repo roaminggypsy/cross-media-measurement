@@ -1,0 +1,10 @@
+**/bazel-*
+**/.project
+**/.ijwb
+**/.aswb
+**/.vscode
+**/.DS_Store
+trace.profile.gz
+.idea
+MODULE.bazel.lock
+user.bazelrc

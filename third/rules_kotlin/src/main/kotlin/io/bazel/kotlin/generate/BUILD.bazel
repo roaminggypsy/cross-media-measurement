@@ -1,0 +1,38 @@
+load("//kotlin:jvm.bzl", "kt_jvm_binary", "kt_jvm_import", "kt_jvm_library")
+
+# Work around neverlink.
+kt_jvm_import(
+    name = "kotlinc_jar",
+    jars = [
+        "@com_github_jetbrains_kotlin//:kotlin-compiler",
+    ],
+    deps = [
+        "//kotlin/compiler:annotations",
+        "//kotlin/compiler:kotlin-stdlib",
+        "//kotlin/compiler:kotlin-stdlib-jdk7",
+        "//kotlin/compiler:kotlin-stdlib-jdk8",
+        "//kotlin/compiler:kotlinx-coroutines-core-jvm",
+        "//kotlin/compiler:trove4j",
+    ],
+)
+
+kt_jvm_library(
+    name = "kotlin_release_options_lib",
+    srcs = glob(["**/*.kt"]),
+    deps = [
+        ":kotlinc_jar",
+        "//kotlin/compiler:kotlin-reflect",
+    ],
+)
+
+kt_jvm_binary(
+    name = "kotlin_release_options",
+    args = [
+        "--out",
+        "$${BUILD_WORKSPACE_DIRECTORY}/src/main/starlark/core/repositories/kotlin",
+    ],
+    main_class = "io.bazel.kotlin.generate.WriteKotlincCapabilities",
+    runtime_deps = [
+        ":kotlin_release_options_lib",
+    ],
+)
