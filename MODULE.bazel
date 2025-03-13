@@ -20,18 +20,17 @@ K8S_CLIENT_VERSION = "21.0.1"
 
 # Must come before rules_kotlin due to toolchain resolution precedence.
 # See https://github.com/bazelbuild/bazel/discussions/23075.
-http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-http_archive(
-    name = "wfa_rules_kotlin_jvm",
-    sha256 = "042a4b46b448a86ebfad9ceb787b0532c3bf1d09182f828a07ed5f6542745518",
-    strip_prefix = "rules_kotlin_jvm-laureanobrs-update-java-rules",
-    url = "https://github.com/world-federation-of-advertisers/rules_kotlin_jvm/archive/refs/heads/laureanobrs-update-java-rules.zip",
+bazel_dep(
+    name = "rules_kotlin_jvm",
+    version = "0.6.0",
+    repo_name = "wfa_rules_kotlin_jvm",
 )
-#bazel_dep(
-#    name = "rules_kotlin_jvm",
-#    version = "0.6.0",
-#    repo_name = "wfa_rules_kotlin_jvm",
-#)
+archive_override(
+    module_name = "rules_kotlin_jvm",
+    integrity = "sha256-BCpLRrRIqG6/rZzreHsFMsO/HQkYL4KKB+1fZUJ0VRg=",
+    strip_prefix = "rules_kotlin_jvm-laureanobrs-update-java-rules",
+    urls = ["https://github.com/world-federation-of-advertisers/rules_kotlin_jvm/archive/refs/heads/laureanobrs-update-java-rules.zip"],
+)
 bazel_dep(
     name = "rules_swig",
     version = "0.1.0",
@@ -323,7 +322,7 @@ pip.parse(
 )
 use_repo(pip, "pip")
 
-#http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "private_membership",
