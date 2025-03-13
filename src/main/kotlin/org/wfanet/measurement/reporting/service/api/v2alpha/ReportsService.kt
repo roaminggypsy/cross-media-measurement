@@ -179,7 +179,7 @@ class ReportsService(
               reportingMetricEntry.value.metricCalculationSpecReportingMetricsList) {
               for (reportingMetric in metricCalculationSpecReportingMetrics.reportingMetricsList) {
                 if (reportingMetric.externalMetricId.isEmpty()) {
-                  throw IllegalStateException("Missing metric id for metricCalculationSpec ${metricCalculationSpecReportingMetrics.externalMetricCalculationSpecId} for report ${internalReport.externalReportId}")
+                  throw IllegalStateException("Missing metric id for metric request ${reportingMetric.createMetricRequestId} for metricCalculationSpec ${metricCalculationSpecReportingMetrics.externalMetricCalculationSpecId} for report ${internalReport.externalReportId}")
                 } else {
                   val name =
                     MetricKey(

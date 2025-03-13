@@ -29,6 +29,6 @@ jobs:
     uses: ./.github/workflows/configure-reporting-v2.yml
     secrets: inherit
     with:
-      image-tag: list-reports-testing-1
+      image-tag: list-reports-testing-2
       environment: dev
       apply: true

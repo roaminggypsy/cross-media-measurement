@@ -39,7 +39,7 @@ jobs:
 
       - name: Write ~/.bazelrc
         env:
-          IMAGE_TAG: list-reports-testing-1
+          IMAGE_TAG: list-reports-testing-2
         run: |
           cat << EOF > ~/.bazelrc
           common --config=ci
