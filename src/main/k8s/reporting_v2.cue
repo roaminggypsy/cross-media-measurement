@@ -15,8 +15,8 @@
 package k8s
 
 #Reporting: Reporting={
-	_verboseGrpcServerLogging: bool | *false
-	_verboseGrpcClientLogging: bool | *false
+	_verboseGrpcServerLogging: true
+	_verboseGrpcClientLogging: true
 
 	_reportSchedulingCronSchedule: string | *"30 6 * * *" // Daily at 6:30 AM
 
