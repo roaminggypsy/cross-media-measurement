@@ -15,7 +15,7 @@
 name: Build and push reporting container images
 
 on:
-  workflow_dispatch:
+  push:
 
 jobs:
   push-images:
@@ -39,7 +39,7 @@ jobs:
 
       - name: Write ~/.bazelrc
         env:
-          IMAGE_TAG: basic-reports-testing-4
+          IMAGE_TAG: basic-reports-testing-5
         run: |
           cat << EOF > ~/.bazelrc
           common --config=ci
