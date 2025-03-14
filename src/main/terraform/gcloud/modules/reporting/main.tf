@@ -67,6 +67,7 @@ resource "google_spanner_database" "reporting" {
   instance         = var.spanner_instance.name
   name             = var.reporting_spanner_database_name
   database_dialect = "GOOGLE_STANDARD_SQL"
+  deletion_protection = false
 }
 
 resource "google_spanner_database_iam_member" "reporting_internal" {
