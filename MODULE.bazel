@@ -25,9 +25,11 @@ bazel_dep(
     version = "0.6.0",
     repo_name = "wfa_rules_kotlin_jvm",
 )
-local_path_override(
+archive_override(
     module_name = "rules_kotlin",
-    path = "./third/rules_kotlin",
+    integrity = "sha256-i2cSoMD8pAaSKN6QMC3Afb+15uUs5j9MrRaOSWo2bZ4=",
+    strip_prefix = "rules_kotlin",
+    urls = ["https://github.com/laureanobrs/test-version/raw/refs/heads/main/rules_kotlin_2_1_0_JacocoFix.zip"],
 )
 bazel_dep(
     name = "rules_swig",
