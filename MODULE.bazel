@@ -27,8 +27,8 @@ bazel_dep(
 )
 git_override(
     module_name = "rules_kotlin",
-    commit = "681b218079a88ae01fddbefa4a5bba8fc1eab9ee",
-    remote = "https://github.com/bazelbuild/rules_kotlin.git",
+    commit = "cbfa497979069781ae7ed0cfc9a8622a3c5ad190",
+    remote = "https://github.com/laureanobrs/rules_kotlin.git",
 )
 bazel_dep(
     name = "rules_swig",
