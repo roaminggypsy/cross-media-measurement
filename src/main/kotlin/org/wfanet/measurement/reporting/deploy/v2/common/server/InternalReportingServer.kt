@@ -39,7 +39,7 @@ import picocli.CommandLine
   showDefaultValues = true,
 )
 open class InternalReportingServer : Runnable {
-  @CommandLine.Mixin protected lateinit var postgresFlags: PostgresFlags
+  @CommandLine.Mixin private lateinit var postgresFlags: PostgresFlags
   @CommandLine.Mixin protected lateinit var spannerFlags: SpannerFlags
   @CommandLine.Mixin private lateinit var serverFlags: CommonServer.Flags
 
