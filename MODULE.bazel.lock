@@ -316,7 +316,7 @@
     "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/cloud-spanner-emulator-bin/1.5.23/MODULE.bazel": "not found",
     "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/common-cpp/0.11.0/MODULE.bazel": "not found",
     "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/common-cpp/0.13.0/MODULE.bazel": "not found",
-    "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/common-jvm/0.101.1/MODULE.bazel": "not found",
+    "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/common-jvm/0.103.0/MODULE.bazel": "not found",
     "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/common-jvm/0.82.1/MODULE.bazel": "not found",
     "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/consent-signaling-client/0.22.0/MODULE.bazel": "not found",
     "https://raw.githubusercontent.com/laureanobrs/bazel-registry/main/modules/cross-media-measurement-api/0.62.0/MODULE.bazel": "not found",
