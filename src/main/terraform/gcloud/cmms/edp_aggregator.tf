@@ -57,5 +57,5 @@ module "edp_aggregator" {
   data_watcher_cert_path                    = "${path.root}/../../../k8s/testing/secretfiles/data_watcher_tls.pem"
   secure_computation_root_ca_id             = "secure-computation-root-ca"
   secure_computation_root_ca_path           = "${path.root}/../../../k8s/testing/secretfiles/secure_computation_root.pem"
-
+  private_network_location                  = data.google_client_config.default.region
 }

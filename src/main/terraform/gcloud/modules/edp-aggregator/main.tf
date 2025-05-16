@@ -122,6 +122,8 @@ module "tee_apps" {
   kms_key_id                    = google_kms_crypto_key.edp_aggregator_kek.id
   docker_image                  = each.value.worker.docker_image
   terraform_service_account     = var.terraform_service_account
+  network_name                  = var.private_network_name
+  subnetwork_name               = var.private_subnetwork_name
 }
 
 resource "google_storage_bucket_iam_member" "mig_storage_viewer" {
@@ -150,4 +152,43 @@ resource "google_storage_bucket_iam_member" "requisition_fetcher_storage_creator
   bucket = module.edp_aggregator_bucket.storage_bucket.name
   role   = "roles/storage.objectCreator"
   member = "serviceAccount:${module.requisition_fetcher_function_service_account.cloud_function_service_account.email}"
+}
+
+# Network configuration for private VPC with internet and Google API access
+resource "google_compute_network" "private_network" {
+  name                    = var.private_network_name
+  auto_create_subnetworks = false
+}
+
+resource "google_compute_subnetwork" "private_subnetwork" {
+  name                     = var.private_subnetwork_name
+  region                   = var.private_network_location
+  network                  = google_compute_network.private_network.id
+  private_ip_google_access = true
+}
+
+# Cloud Router for NAT gateway
+resource "google_compute_router" "router" {
+  name    = var.private_router_name
+  region  = var.private_network_location
+  network = google_compute_network.private_network.id
+}
+
+# Cloud NAT configuration
+resource "google_compute_router_nat" "nat_gateway" {
+  name                               = var.nat_name
+  router                             = google_compute_router.router.name
+  region                             = google_compute_router.router.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+  subnetwork {
+    name                    = google_compute_subnetwork.private_subnetwork.self_link
+    source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+  }
+
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
 }
