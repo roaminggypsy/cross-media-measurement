@@ -59,10 +59,9 @@ module "edp_aggregator" {
   secure_computation_root_ca_path           = "${path.root}/../../../k8s/testing/secretfiles/secure_computation_root.pem"
   
   # Network configuration
-  network_name      = "edp-aggregator-network"
-  subnetwork_name   = "edp-aggregator-subnet"
-  subnet_cidr_range = "10.0.0.0/24"
-  region            = data.google_client_config.default.region
-  router_name       = "edp-aggregator-router"
-  nat_name          = "edp-aggregator-nat"
+  network_name                              = "edp-aggregator-network"
+  subnetwork_name                           = "edp-aggregator-subnet"
+  subnet_cidr_range                         = "10.0.0.0/24"
+  router_name                               = "edp-aggregator-router"
+  nat_name                                  = "edp-aggregator-nat"
 }
