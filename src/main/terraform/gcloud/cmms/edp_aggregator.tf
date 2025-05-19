@@ -39,7 +39,7 @@ locals {
 module "edp_aggregator" {
   source = "../modules/edp-aggregator"
 
-  key_ring_name                             = "edpa-secure-computation-cloud-test-key-ring"
+  key_ring_name                             = "edpa-secure-computation-cloud-test-key-ring-georgi"
   key_ring_location                         = local.key_ring_location
   kms_key_name                              = "edpa-secure-computation-kek"
   queue_worker_configs                      = local.queue_worker_configs
@@ -57,5 +57,12 @@ module "edp_aggregator" {
   data_watcher_cert_path                    = "${path.root}/../../../k8s/testing/secretfiles/data_watcher_tls.pem"
   secure_computation_root_ca_id             = "secure-computation-root-ca"
   secure_computation_root_ca_path           = "${path.root}/../../../k8s/testing/secretfiles/secure_computation_root.pem"
-  private_network_location                  = data.google_client_config.default.region
+  
+  # Network configuration
+  network_name      = "edp-aggregator-network"
+  subnetwork_name   = "edp-aggregator-subnet"
+  subnet_cidr_range = "10.0.0.0/24"
+  region            = data.google_client_config.default.region
+  router_name       = "edp-aggregator-router"
+  nat_name          = "edp-aggregator-nat"
 }

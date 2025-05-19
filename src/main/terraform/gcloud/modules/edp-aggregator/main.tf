@@ -122,8 +122,8 @@ module "tee_apps" {
   kms_key_id                    = google_kms_crypto_key.edp_aggregator_kek.id
   docker_image                  = each.value.worker.docker_image
   terraform_service_account     = var.terraform_service_account
-  network_name                  = var.private_network_name
-  subnetwork_name               = var.private_subnetwork_name
+  network_name                  = google_compute_network.private_network.name
+  subnetwork_name               = google_compute_subnetwork.private_subnetwork.name
 }
 
 resource "google_storage_bucket_iam_member" "mig_storage_viewer" {
@@ -156,21 +156,22 @@ resource "google_storage_bucket_iam_member" "requisition_fetcher_storage_creator
 
 # Network configuration for private VPC with internet and Google API access
 resource "google_compute_network" "private_network" {
-  name                    = var.private_network_name
+  name                    = var.network_name
   auto_create_subnetworks = false
 }
 
 resource "google_compute_subnetwork" "private_subnetwork" {
-  name                     = var.private_subnetwork_name
-  region                   = var.private_network_location
+  name                     = var.subnetwork_name
+  ip_cidr_range            = var.subnet_cidr_range
+  region                   = var.region
   network                  = google_compute_network.private_network.id
   private_ip_google_access = true
 }
 
 # Cloud Router for NAT gateway
 resource "google_compute_router" "router" {
-  name    = var.private_router_name
-  region  = var.private_network_location
+  name    = var.router_name
+  region  = var.region
   network = google_compute_network.private_network.id
 }
 

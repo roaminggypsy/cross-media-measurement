@@ -126,25 +126,31 @@ variable "secure_computation_root_ca_path" {
   description = "The path of the secure computation CA root"
 }
 
-variable "private_network_location" {
-  description = "The region used for the private network"
+variable "network_name" {
+  description = "The name of the VPC network for edp aggregator components."
   type        = string
-  nullable    = false
+  default     = "edp-aggregator-network"
 }
 
-variable "private_network_name" {
-  description = "The name of the VPC network for the MIG instances."
+variable "subnetwork_name" {
+  description = "The name of the subnetwork for edp aggregator components."
   type        = string
-  default     = "private-network"
+  default     = "edp-aggregator-subnet"
 }
 
-variable "private_subnetwork_name" {
-  description = "The name of the subnetwork for the MIG instances."
+variable "subnet_cidr_range" {
+  description = "The IP CIDR range for the private subnetwork."
   type        = string
-  default     = "private-subnet"
+  default     = "10.0.0.0/24"
 }
 
-variable "private_router_name" {
+variable "region" {
+  description = "The region where resources will be created."
+  type        = string
+  default     = "us-central1"
+}
+
+variable "router_name" {
   description = "The name for the Cloud Router for the private network."
   type        = string
   default     = "nat-router"
