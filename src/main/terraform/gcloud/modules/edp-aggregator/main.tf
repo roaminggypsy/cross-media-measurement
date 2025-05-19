@@ -157,7 +157,7 @@ resource "google_storage_bucket_iam_member" "requisition_fetcher_storage_creator
 # Network configuration for private VPC with internet and Google API access
 resource "google_compute_network" "private_network" {
   name                    = var.network_name
-  auto_create_subnetworks = falsegit config pull.rebase true 
+  auto_create_subnetworks = false
 }
 
 resource "google_compute_subnetwork" "private_subnetwork" {
