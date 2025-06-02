@@ -25,6 +25,11 @@ import org.wfanet.measurement.api.v2alpha.createModelSuiteRequest
 import org.wfanet.measurement.api.v2alpha.getModelSuiteRequest
 import org.wfanet.measurement.api.v2alpha.listModelSuitesRequest
 import org.wfanet.measurement.api.v2alpha.modelSuite
+import org.wfanet.measurement.api.v2alpha.PopulationsGrpcKt
+import org.wfanet.measurement.api.v2alpha.createPopulationRequest
+import org.wfanet.measurement.api.v2alpha.getPopulationsRequest
+import org.wfanet.measurement.api.v2alpha.listPopulationsRequest
+import org.wfanet.measurement.api.v2alpha.population
 import org.wfanet.measurement.common.commandLineMain
 import org.wfanet.measurement.common.grpc.TlsFlags
 import org.wfanet.measurement.common.grpc.buildMutualTlsChannel
@@ -41,7 +46,7 @@ private val CHANNEL_SHUTDOWN_TIMEOUT = Duration.ofSeconds(30)
 @Command(
   name = "model-repository",
   description = ["Manages all Model Repository artifacts"],
-  subcommands = [CommandLine.HelpCommand::class, ModelSuites::class],
+  subcommands = [CommandLine.HelpCommand::class, ModelSuites::class, Populations::class],
 )
 class ModelRepository private constructor() : Runnable {
   @Mixin private lateinit var tlsFlags: TlsFlags
@@ -76,6 +81,120 @@ class ModelRepository private constructor() : Runnable {
 
   companion object {
     @JvmStatic fun main(args: Array<String>) = commandLineMain(ModelRepository(), args)
+  }
+}
+
+@Command(
+  name = "populations",
+  subcommands =
+    [
+      CommandLine.HelpCommand::class,
+      GetPopulation::class,
+      CreatePopulation::class,
+      ListPopulations::class,
+    ],
+)
+private class Populations {
+  @ParentCommand private lateinit var parentCommand: ModelRepository
+
+  val populationsClient: PopulationsGrpcKt.PopulationsCoroutineStub by lazy {
+    PopulationsGrpcKt.PopulationsCoroutineStub(parentCommand.channel)
+  }
+}
+
+@Command(name = "get", description = ["Get a Population"])
+class GetPopulation : Runnable {
+  @ParentCommand private lateinit var parentCommand: Populations
+
+  @Parameters(index = "0", description = ["API resource name of the Population"], arity = "1")
+  private lateinit var populationName: String
+
+  override fun run() {
+    val population = runBlocking {
+      parentCommand.populationsClient.getPopulation(
+        getPopulationsRequest { name = populationName }
+      )
+    }
+    println(population)
+  }
+}
+
+@Command(name = "create", description = ["Create a Population"])
+class CreatePopulation : Runnable {
+  @ParentCommand private lateinit var parentCommand: Populations
+
+  @Option(
+    names = ["--parent"],
+    description = ["Resource name of the parent DataProvider"],
+    required = true,
+  )
+  private lateinit var parentDataProvider: String
+
+  @Option(
+    names = ["--model-suite"],
+    description = ["Resource name of the ModelSuite"],
+    required = true,
+  )
+  private lateinit var modelSuiteName: String
+
+  @Option(
+    names = ["--display-name"],
+    description = ["Human-readable nickname for the Population"],
+    required = true,
+  )
+  private lateinit var populationDisplayName: String
+
+  @Option(
+    names = ["--description"],
+    description = ["Human-readable description of usage of the Population"],
+    required = false,
+  )
+  private lateinit var populationDescription: String
+
+  // TODO(@alphago): Add Population.EventTemplate and Population.PopulationBlob
+
+  override fun run() {
+    val population = runBlocking {
+      parentCommand.populationsClient.createPopulation(
+        createPopulationRequest {
+          parent = parentDataProvider
+          population = population {
+            modelSuite = modelSuiteName
+            displayName = populationDisplayName
+            description = populationDescription
+          }
+        }
+      )
+    }
+
+    println(population)
+  }
+}
+
+@Command(name = "list", description = ["List Populations"])
+class ListPopulations : Runnable {
+  @ParentCommand private lateinit var parentCommand: Populations
+
+  @Option(
+    names = ["--parent"],
+    description = ["Resource name of the parent DataProvider"],
+    required = true,
+  )
+  private lateinit var parentDataProvider: String
+
+  @Mixin private lateinit var pageParams: PageParams
+
+  override fun run() {
+    val response = runBlocking {
+      parentCommand.populationsClient.listPopulations(
+        listPopulationsRequest {
+          parent = parentDataProvider
+          pageSize = pageParams.pageSize
+          pageToken = pageParams.pageToken
+        }
+      )
+    }
+    println(response)
   }
 }
 
