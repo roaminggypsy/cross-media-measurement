@@ -28,26 +28,35 @@ import java.util.concurrent.TimeUnit.SECONDS
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
+import com.google.protobuf.util.Timestamps
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.JUnit4
 import org.mockito.kotlin.any
 import org.mockito.kotlin.verify
+import org.wfanet.measurement.api.v2alpha.CreateModelLineRequest
 import org.wfanet.measurement.api.v2alpha.CreateModelSuiteRequest
 import org.wfanet.measurement.api.v2alpha.GetModelSuiteRequest
+import org.wfanet.measurement.api.v2alpha.ModelLine
 import org.wfanet.measurement.api.v2alpha.ListModelSuitesPageTokenKt.previousPageEnd
 import org.wfanet.measurement.api.v2alpha.ListModelSuitesRequest
 import org.wfanet.measurement.api.v2alpha.ListModelSuitesResponse
 import org.wfanet.measurement.api.v2alpha.ModelProviderKey
+import org.wfanet.measurement.api.v2alpha.ModelLineKey
+import org.wfanet.measurement.api.v2alpha.ModelLinesGrpcKt.ModelLinesCoroutineImplBase
 import org.wfanet.measurement.api.v2alpha.ModelSuite
 import org.wfanet.measurement.api.v2alpha.ModelSuiteKey
 import org.wfanet.measurement.api.v2alpha.ModelSuitesGrpcKt.ModelSuitesCoroutineImplBase
+import org.wfanet.measurement.api.v2alpha.SetModelLineActiveEndTimeRequest
+import org.wfanet.measurement.api.v2alpha.createModelLineRequest
 import org.wfanet.measurement.api.v2alpha.createModelSuiteRequest
 import org.wfanet.measurement.api.v2alpha.getModelSuiteRequest
 import org.wfanet.measurement.api.v2alpha.listModelSuitesPageToken
 import org.wfanet.measurement.api.v2alpha.listModelSuitesRequest
 import org.wfanet.measurement.api.v2alpha.listModelSuitesResponse
+import org.wfanet.measurement.api.v2alpha.modelLine
 import org.wfanet.measurement.api.v2alpha.modelSuite
+import org.wfanet.measurement.api.v2alpha.setModelLineActiveEndTimeRequest
 import org.wfanet.measurement.common.base64UrlEncode
 import org.wfanet.measurement.common.crypto.SigningCerts
 import org.wfanet.measurement.common.getRuntimePath
@@ -74,6 +83,11 @@ class ModelRepositoryTest {
       )
   }
 
+  private val modelLinesServiceMock: ModelLinesCoroutineImplBase = mockService {
+    onBlocking { createModelLine(any()) }.thenReturn(MODEL_LINE)
+    onBlocking { setModelLineActiveEndTime(any()) }.thenReturn(MODEL_LINE)
+  }
+
   private val serverCerts =
     SigningCerts.fromPemFiles(
       certificateFile = SECRETS_DIR.resolve("kingdom_tls.pem").toFile(),
@@ -81,7 +95,8 @@ class ModelRepositoryTest {
       trustedCertCollectionFile = SECRETS_DIR.resolve("kingdom_root.pem").toFile(),
     )
 
-  private val services: List<ServerServiceDefinition> = listOf(modelSuitesServiceMock.bindService())
+  private val services: List<ServerServiceDefinition> =
+    listOf(modelSuitesServiceMock.bindService(), modelLinesServiceMock.bindService())
 
   private val server: Server =
     NettyServerBuilder.forPort(0)
@@ -231,6 +246,21 @@ class ModelRepositoryTest {
       createTime = CREATE_TIME
     }
 
+    private const val MODEL_LINE_NAME = "$MODEL_SUITE_NAME/modelLines/AAAAAAAAAHs"
+    private val MODEL_LINE: ModelLine = modelLine {
+      name = MODEL_LINE_NAME
+      parent = MODEL_SUITE_NAME
+      displayName = DISPLAY_NAME
+      description = DESCRIPTION
+      activeStartTime = Timestamps.parse(ACTIVE_START_TIME_STRING)
+      activeEndTime = Timestamps.parse(ACTIVE_END_TIME_STRING)
+      type = ModelLine.Type.DEV
+    }
+    private const val ACTIVE_START_TIME_STRING = "2025-01-15T10:00:00Z"
+    private const val ACTIVE_END_TIME_STRING = "2025-02-15T10:00:00Z"
+    private const val MODEL_LINE_TYPE_STRING = "DEV"
+    private const val HOLDBACK_MODEL_LINE_NAME = "$MODEL_SUITE_NAME/modelLines/BBBBBBBBBHs"
+
     private const val PAGE_SIZE = 50
     private val LIST_MODEL_SUITES_PAGE_TOKEN = listModelSuitesPageToken {
       pageSize = PAGE_SIZE
@@ -249,5 +279,69 @@ class ModelRepositoryTest {
         externalModelSuiteId = EXTERNAL_MODEL_SUITE_ID_2
       }
     }
+  }
+
+  @Test
+  fun `modelLines create calls CreateModelLine with valid request`() {
+    val args =
+      commonArgs +
+        arrayOf(
+          "model-lines",
+          "create",
+          "--parent=$MODEL_SUITE_NAME",
+          "--display-name=$DISPLAY_NAME",
+          "--description=$DESCRIPTION",
+          "--active-start-time=$ACTIVE_START_TIME_STRING",
+          "--type=$MODEL_LINE_TYPE_STRING",
+          "--holdback-model-line=$HOLDBACK_MODEL_LINE_NAME",
+        )
+
+    val output = callCli(args)
+
+    val request: CreateModelLineRequest = captureFirst {
+      runBlocking { verify(modelLinesServiceMock).createModelLine(capture()) }
+    }
+
+    assertThat(request)
+      .isEqualTo(
+        createModelLineRequest {
+          parent = MODEL_SUITE_NAME
+          modelLine = modelLine {
+            displayName = DISPLAY_NAME
+            description = DESCRIPTION
+            activeStartTime = Timestamps.parse(ACTIVE_START_TIME_STRING)
+            type = ModelLine.Type.valueOf(MODEL_LINE_TYPE_STRING)
+            holdbackModelLineXref = HOLDBACK_MODEL_LINE_NAME
+          }
+        }
+      )
+    assertThat(parseTextProto(output.reader(), ModelLine.getDefaultInstance())).isEqualTo(MODEL_LINE)
+  }
+
+  @Test
+  fun `modelLines set-active-end-time calls SetModelLineActiveEndTime with valid request`() {
+    val args =
+      commonArgs +
+        arrayOf(
+          "model-lines",
+          "set-active-end-time",
+          "--name=$MODEL_LINE_NAME",
+          "--active-end-time=$ACTIVE_END_TIME_STRING",
+        )
+
+    val output = callCli(args)
+
+    val request: SetModelLineActiveEndTimeRequest = captureFirst {
+      runBlocking { verify(modelLinesServiceMock).setModelLineActiveEndTime(capture()) }
+    }
+
+    assertThat(request)
+      .isEqualTo(
+        setModelLineActiveEndTimeRequest {
+          name = MODEL_LINE_NAME
+          activeEndTime = Timestamps.parse(ACTIVE_END_TIME_STRING)
+        }
+      )
+    assertThat(parseTextProto(output.reader(), ModelLine.getDefaultInstance())).isEqualTo(MODEL_LINE)
   }
 }

@@ -16,14 +16,20 @@
 
 package org.wfanet.measurement.kingdom.deploy.tools
 
+import com.google.protobuf.util.Timestamps
 import io.grpc.ManagedChannel
 import java.time.Duration
 import kotlinx.coroutines.runBlocking
 import org.wfanet.measurement.api.v2alpha.ListModelSuitesResponse
+import org.wfanet.measurement.api.v2alpha.ModelLine
+import org.wfanet.measurement.api.v2alpha.ModelLinesGrpcKt.ModelLinesCoroutineStub
 import org.wfanet.measurement.api.v2alpha.ModelSuitesGrpcKt.ModelSuitesCoroutineStub
+import org.wfanet.measurement.api.v2alpha.SetModelLineActiveEndTimeRequest
+import org.wfanet.measurement.api.v2alpha.createModelLineRequest
 import org.wfanet.measurement.api.v2alpha.createModelSuiteRequest
 import org.wfanet.measurement.api.v2alpha.getModelSuiteRequest
 import org.wfanet.measurement.api.v2alpha.listModelSuitesRequest
+import org.wfanet.measurement.api.v2alpha.modelLine
 import org.wfanet.measurement.api.v2alpha.modelSuite
 import org.wfanet.measurement.common.commandLineMain
 import org.wfanet.measurement.common.grpc.TlsFlags
@@ -41,7 +47,7 @@ private val CHANNEL_SHUTDOWN_TIMEOUT = Duration.ofSeconds(30)
 @Command(
   name = "model-repository",
   description = ["Manages all Model Repository artifacts"],
-  subcommands = [CommandLine.HelpCommand::class, ModelSuites::class],
+  subcommands = [CommandLine.HelpCommand::class, ModelSuites::class, ModelLines::class],
 )
 class ModelRepository private constructor() : Runnable {
   @Mixin private lateinit var tlsFlags: TlsFlags
@@ -94,6 +100,118 @@ private class ModelSuites {
 
   val modelSuitesClient: ModelSuitesCoroutineStub by lazy {
     ModelSuitesCoroutineStub(parentCommand.channel)
+  }
+}
+
+@Command(
+  name = "model-lines",
+  subcommands =
+    [
+      CommandLine.HelpCommand::class,
+      CreateModelLine::class,
+      SetModelLineActiveEndTime::class,
+    ],
+)
+private class ModelLines {
+  @ParentCommand private lateinit var parentCommand: ModelRepository
+
+  val modelLinesClient: ModelLinesCoroutineStub by lazy {
+    ModelLinesCoroutineStub(parentCommand.channel)
+  }
+}
+
+@Command(name = "create", description = ["Create a ModelLine"])
+class CreateModelLine : Runnable {
+  @ParentCommand private lateinit var parentCommand: ModelLines
+
+  @Option(
+    names = ["--parent"],
+    description = ["API resource name of the parent ModelSuite"],
+    required = true,
+  )
+  private lateinit var parentModelSuite: String
+
+  @Option(
+    names = ["--display-name"],
+    description = ["Human-readable nickname for the ModelLine"],
+    required = true,
+  )
+  private lateinit var modelLineDisplayName: String
+
+  @Option(
+    names = ["--description"],
+    description = ["Human-readable description of usage of the ModelLine"],
+    required = false,
+    defaultValue = "",
+  )
+  private lateinit var modelLineDescription: String
+
+  @Option(
+    names = ["--active-start-time"],
+    description = ["Timestamp of when the ModelLine becomes active in RFC3339 format"],
+    required = true,
+  )
+  private lateinit var activeStartTimeString: String
+
+  @Option(
+    names = ["--type"],
+    description = ["Type of the ModelLine (e.g., HOLDOUT, RING_HINGE, SPARROW_TITAN)"],
+    required = true,
+  )
+  private lateinit var typeString: String
+
+  @Option(
+    names = ["--holdback-model-line"],
+    description = ["API resource name of the holdback ModelLine"],
+    required = false,
+  )
+  private var holdbackModelLine: String? = null
+
+  override fun run() {
+    val modelLine = modelLine {
+      displayName = modelLineDisplayName
+      description = modelLineDescription
+      activeStartTime = Timestamps.parse(activeStartTimeString)
+      type = ModelLine.Type.valueOf(typeString.uppercase())
+      if (holdbackModelLine != null) {
+        holdbackModelLineXref = holdbackModelLine!!
+      }
+    }
+    val request = createModelLineRequest {
+      parent = parentModelSuite
+      this.modelLine = modelLine
+    }
+    val result = runBlocking { parentCommand.modelLinesClient.createModelLine(request) }
+    println(result)
+  }
+}
+
+@Command(name = "set-active-end-time", description = ["Set the active end time of a ModelLine"])
+class SetModelLineActiveEndTime : Runnable {
+  @ParentCommand private lateinit var parentCommand: ModelLines
+
+  @Option(
+    names = ["--name"],
+    description = ["API resource name of the ModelLine"],
+    required = true,
+  )
+  private lateinit var modelLineName: String
+
+  @Option(
+    names = ["--active-end-time"],
+    description = ["Timestamp of when the ModelLine becomes inactive in RFC3339 format"],
+    required = true,
+  )
+  private lateinit var activeEndTimeString: String
+
+  override fun run() {
+    val request =
+      SetModelLineActiveEndTimeRequest.newBuilder()
+        .setName(modelLineName)
+        .setActiveEndTime(Timestamps.parse(activeEndTimeString))
+        .build()
+    val result = runBlocking { parentCommand.modelLinesClient.setModelLineActiveEndTime(request) }
+    println(result)
   }
 }
 
