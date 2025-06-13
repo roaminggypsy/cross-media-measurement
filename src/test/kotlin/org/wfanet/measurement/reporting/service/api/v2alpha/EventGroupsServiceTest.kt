@@ -40,12 +40,25 @@ import org.junit.runners.JUnit4
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.doReturn
+import com.google.protobuf.Any as ProtoAny
+import com.google.protobuf.ByteString
+import com.google.protobuf.FieldMask
+import org.junit.Rule
+import org.mockito.Mock
+import org.mockito.Mockito.lenient
+import org.mockito.junit.MockitoJUnit
+import org.mockito.junit.MockitoRule
+import org.mockito.kotlin.any
+import org.mockito.kotlin.argThat
+import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.stub
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.mockito.kotlin.wheneverBlocking
 import org.wfanet.measurement.access.client.v1alpha.Authorization
+import org.wfanet.measurement.api.v2alpha.SignedMessage
 import org.wfanet.measurement.access.client.v1alpha.testing.Authentication.withPrincipalAndScopes
 import org.wfanet.measurement.access.v1alpha.CheckPermissionsResponse
 import org.wfanet.measurement.access.v1alpha.PermissionsGrpcKt
@@ -59,9 +72,15 @@ import org.wfanet.measurement.api.v2alpha.EventGroupMetadataDescriptorKey
 import org.wfanet.measurement.api.v2alpha.EventGroupMetadataDescriptorsGrpcKt.EventGroupMetadataDescriptorsCoroutineImplBase
 import org.wfanet.measurement.api.v2alpha.EventGroupMetadataDescriptorsGrpcKt.EventGroupMetadataDescriptorsCoroutineStub
 import org.wfanet.measurement.api.v2alpha.EventGroupMetadataKt as CmmsEventGroupMetadataKt
+import org.wfanet.measurement.api.v2alpha.EventGroupsGrpcKt.EventGroupsCoroutineStub as CmmsEventGroupsCoroutineStub
 import org.wfanet.measurement.api.v2alpha.EventGroupsGrpcKt.EventGroupsCoroutineImplBase
-import org.wfanet.measurement.api.v2alpha.EventGroupsGrpcKt.EventGroupsCoroutineStub
 import org.wfanet.measurement.api.v2alpha.ListEventGroupsRequest as CmmsListEventGroupsRequest
+import org.wfanet.measurement.api.v2alpha.cmmsEventGroup
+import org.wfanet.measurement.api.v2alpha.createEventGroupRequest as cmmsCreateEventGroupRequest
+import org.wfanet.measurement.api.v2alpha.encryptionPublicKey
+import org.wfanet.measurement.api.v2alpha.eventGroupKey as cmmsEventGroupKey
+import org.wfanet.measurement.api.v2alpha.signedMessage
+import org.wfanet.measurement.api.v2alpha.updateEventGroupRequest as cmmsUpdateEventGroupRequest
 import org.wfanet.measurement.api.v2alpha.ListEventGroupsRequestKt as CmmsListEventGroupsRequestKt
 import org.wfanet.measurement.api.v2alpha.MeasurementConsumerKey
 import org.wfanet.measurement.api.v2alpha.MediaType as CmmsMediaType
@@ -79,6 +98,7 @@ import org.wfanet.measurement.api.v2alpha.listEventGroupsResponse as cmmsListEve
 import org.wfanet.measurement.common.ProtoReflection
 import org.wfanet.measurement.common.base64UrlEncode
 import org.wfanet.measurement.common.crypto.tink.loadPrivateKey
+import org.wfanet.measurement.common.crypto.SigningKeyHandle
 import org.wfanet.measurement.common.crypto.tink.loadPublicKey
 import org.wfanet.measurement.common.getRuntimePath
 import org.wfanet.measurement.common.grpc.testing.GrpcTestServerRule
@@ -86,13 +106,19 @@ import org.wfanet.measurement.common.grpc.testing.mockService
 import org.wfanet.measurement.common.pack
 import org.wfanet.measurement.common.testing.verifyProtoArgument
 import org.wfanet.measurement.common.toProtoTime
-import org.wfanet.measurement.config.reporting.measurementConsumerConfig
+import org.wfanet.measurement.config.reporting.MeasurementConsumerConfigs
 import org.wfanet.measurement.config.reporting.measurementConsumerConfigs
 import org.wfanet.measurement.consent.client.common.toEncryptionPublicKey
 import org.wfanet.measurement.consent.client.dataprovider.encryptMetadata
 import org.wfanet.measurement.reporting.service.api.CelEnvCacheProvider
+import org.wfanet.measurement.reporting.service.api.EncryptionKeyPairStore
 import org.wfanet.measurement.reporting.service.api.InMemoryEncryptionKeyPairStore
+import org.wfanet.measurement.reporting.v2alpha.BatchCreateEventGroupsRequest
+import org.wfanet.measurement.reporting.v2alpha.BatchUpdateEventGroupsRequest
+import org.wfanet.measurement.reporting.v2alpha.CreateEventGroupRequest
 import org.wfanet.measurement.reporting.v2alpha.EventGroup
+import org.wfanet.measurement.reporting.v2alpha.eventGroupKey
+import org.wfanet.measurement.reporting.v2alpha.UpdateEventGroupRequest
 import org.wfanet.measurement.reporting.v2alpha.EventGroupKt
 import org.wfanet.measurement.reporting.v2alpha.ListEventGroupsRequest
 import org.wfanet.measurement.reporting.v2alpha.ListEventGroupsRequestKt
@@ -104,7 +130,18 @@ import org.wfanet.measurement.reporting.v2alpha.listEventGroupsResponse
 
 @RunWith(JUnit4::class)
 class EventGroupsServiceTest {
-  private val cmmsEventGroupsMock: EventGroupsCoroutineImplBase = mockService {
+  // Mocks for dependencies needed by EventGroupsService, replacing some of the GrpcTestServerRule setup for batch tests
+  @get:Rule val mockitoRule: MockitoRule = MockitoJUnit.rule()
+
+  @Mock private lateinit var cmmsEventGroupsStubMock: CmmsEventGroupsCoroutineStub // Renamed to avoid confusion
+  @Mock private lateinit var authorizationClientMock: Authorization // Renamed
+  @Mock private lateinit var measurementConsumerConfigsMock: MeasurementConsumerConfigs // Renamed
+  @Mock private lateinit var encryptionKeyPairStoreMock: EncryptionKeyPairStore // Renamed
+  @Mock private lateinit var celEnvProviderMock: CelEnvCacheProvider // Renamed
+
+  // Existing GrpcTestServerRule for other tests if needed, or can be phased out if all tests adopt direct mocking.
+  // For now, batch tests will use the @Mock fields, listEventGroups tests will use this.
+  private val cmmsEventGroupsGrpcMock: EventGroupsCoroutineImplBase = mockService { // Original mock for list
     onBlocking { listEventGroups(any()) }
       .thenReturn(
         cmmsListEventGroupsResponse {
@@ -134,39 +171,60 @@ class EventGroupsServiceTest {
 
   @get:Rule
   val grpcTestServerRule = GrpcTestServerRule {
-    addService(cmmsEventGroupsMock)
+    addService(cmmsEventGroupsGrpcMock) // Keep original for list tests
     addService(cmmsEventGroupMetadataDescriptorsMock)
     addService(permissionsServiceMock)
   }
+  // End of original GrpcTestServerRule setup
 
-  private lateinit var authorization: Authorization
-  private lateinit var celEnvCacheProvider: CelEnvCacheProvider
   private lateinit var service: EventGroupsService
+  private lateinit var serviceForListTests: EventGroupsService // To keep list tests working with their setup
   private val fakeTicker = SettableSystemTicker()
+
 
   @Before
   fun initService() {
-    authorization =
-      Authorization(PermissionsGrpcKt.PermissionsCoroutineStub(grpcTestServerRule.channel))
+    // Setup for batchCreate/Update tests using @Mock fields
+    lenient().whenever(cmmsEventGroupsStubMock.withAuthenticationKey(any())).thenReturn(cmmsEventGroupsStubMock)
+    val mcConfig = org.wfanet.measurement.config.reporting.measurementConsumerConfig {
+        apiKey = Companion.API_KEY
+        signingKeyPair = signedMessage {
+            message = ProtoAny.pack(ENCRYPTION_PUBLIC_KEY_FROM_CONFIG)
+            signature = TEST_ENCRYPTION_PK_SIGNATURE
+        }
+    }
+    lenient().whenever(measurementConsumerConfigsMock.configsMap).thenReturn(mapOf(MC_PARENT_RESOURCE_NAME to mcConfig))
 
-    celEnvCacheProvider =
+    service = EventGroupsService(
+        cmmsEventGroupsStubMock,
+        authorizationClientMock,
+        celEnvProviderMock,
+        measurementConsumerConfigsMock,
+        encryptionKeyPairStoreMock,
+        fakeTicker
+    )
+
+    // Setup for original listEventGroups tests
+    val authorizationForList =
+      Authorization(PermissionsGrpcKt.PermissionsCoroutineStub(grpcTestServerRule.channel))
+    val celEnvCacheProviderForList =
       CelEnvCacheProvider(
         EventGroupMetadataDescriptorsCoroutineStub(grpcTestServerRule.channel),
         EventGroup.getDescriptor(),
         Duration.ofSeconds(5),
         emptyList(),
       )
-
-    service =
+    serviceForListTests =
       EventGroupsService(
-        EventGroupsCoroutineStub(grpcTestServerRule.channel),
-        authorization,
-        celEnvCacheProvider,
-        MEASUREMENT_CONSUMER_CONFIGS,
-        ENCRYPTION_KEY_PAIR_STORE,
+        EventGroupsCoroutineStub(grpcTestServerRule.channel), // Uses GrpcTestServerRule channel
+        authorizationForList,
+        celEnvCacheProviderForList,
+        MEASUREMENT_CONSUMER_CONFIGS, // Original companion object configs
+        ENCRYPTION_KEY_PAIR_STORE,   // Original companion object store
         fakeTicker,
       )
   }
+
 
   @After
   fun closeCelEnvCacheProvider() {
@@ -806,9 +864,9 @@ class EventGroupsServiceTest {
     assertFailsWith<RuntimeException> {
       withPrincipalAndScopes(PRINCIPAL, SCOPES) {
         runBlocking {
-          service.listEventGroups(
+          serviceForListTests.listEventGroups( // Use serviceForListTests
             listEventGroupsRequest {
-              parent = MEASUREMENT_CONSUMER_NAME
+              parent = MEASUREMENT_CONSUMER_NAME_FOR_LIST_TESTS // Use appropriate constant
               filter = "field_that_doesnt_exist == 10"
             }
           )
@@ -817,18 +875,302 @@ class EventGroupsServiceTest {
     }
   }
 
+  // Constants for new batch tests - some may overlap with existing companion, try to make them distinct if needed or reuse.
+  // For clarity, new constants specific to batch tests are here.
+  private val BATCH_TEST_MC_ID = "mc_batch_test"
+  private val MC_PARENT_RESOURCE_NAME = MeasurementConsumerKey(BATCH_TEST_MC_ID).toName()
+  private val BATCH_TEST_DP_ID = "dp_batch_test"
+  private const val BATCH_TEST_API_KEY = "batch_test_api_key"
+  private val TEST_ENCRYPTION_PK_DATA = ByteString.copyFromUtf8("test_encryption_pk_data_batch")
+  private val TEST_ENCRYPTION_PK_SIGNATURE = ByteString.copyFromUtf8("test_encryption_pk_signature_batch")
+  private val ENCRYPTION_PUBLIC_KEY_FROM_CONFIG = encryptionPublicKey { data = TEST_ENCRYPTION_PK_DATA }
+
+  private val BATCH_EVENT_GROUP_REF_ID_1 = "batch_ref_id_1"
+  private val BATCH_EVENT_GROUP_REF_ID_2 = "batch_ref_id_2"
+
+  private val BATCH_EVENT_GROUP_ID_1 = "batch_eg_id_1"
+  private val BATCH_EVENT_GROUP_ID_2 = "batch_eg_id_2"
+
+  private val BATCH_PUBLIC_EVENT_GROUP_NAME_1 = EventGroupKey(BATCH_TEST_MC_ID, BATCH_EVENT_GROUP_ID_1).toName()
+  private val BATCH_PUBLIC_EVENT_GROUP_NAME_2 = EventGroupKey(BATCH_TEST_MC_ID, BATCH_EVENT_GROUP_ID_2).toName()
+
+  private val BATCH_CMMS_EVENT_GROUP_KEY_1 = cmmsEventGroupKey {
+    measurementConsumerId = BATCH_TEST_MC_ID
+    dataProviderId = BATCH_TEST_DP_ID
+    eventGroupId = BATCH_EVENT_GROUP_ID_1
+  }
+  private val BATCH_CMMS_EVENT_GROUP_KEY_2 = cmmsEventGroupKey {
+    measurementConsumerId = BATCH_TEST_MC_ID
+    dataProviderId = BATCH_TEST_DP_ID
+    eventGroupId = BATCH_EVENT_GROUP_ID_2
+  }
+
+  private fun createCmmsEventGroupForBatchTest(id: String, refId: String): CmmsEventGroup {
+    return cmmsEventGroup {
+      name = CmmsEventGroupKey(BATCH_TEST_MC_ID, BATCH_TEST_DP_ID, id).toName()
+      measurementConsumer = MeasurementConsumerKey(BATCH_TEST_MC_ID).toName()
+      eventGroupReferenceId = refId
+      // Minimal fields for batch tests
+    }
+  }
+
+  private fun createPublicEventGroupForBatchTest(egId: String, refId: String, metadata: EventGroup.Metadata? = null): EventGroup {
+    return eventGroup {
+      name = EventGroupKey(BATCH_TEST_MC_ID, egId).toName()
+      cmmsEventGroup = CmmsEventGroupKey(BATCH_TEST_MC_ID, BATCH_TEST_DP_ID, egId).toName()
+      cmmsDataProvider = DataProviderKey(BATCH_TEST_DP_ID).toName()
+      eventGroupReferenceId = refId
+      if (metadata != null) {
+        this.metadata = metadata
+      }
+    }
+  }
+
+  @Test
+  fun `batchCreateEventGroups success creates multiple event groups`() = runBlocking {
+    val createRequest1 = CreateEventGroupRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, BATCH_EVENT_GROUP_REF_ID_1)
+      requestId = "req1"
+    }.build()
+    val createRequest2 = CreateEventGroupRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_2, BATCH_EVENT_GROUP_REF_ID_2)
+      requestId = "req2"
+    }.build()
+
+    val batchRequest = BatchCreateEventGroupsRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      addRequests(createRequest1)
+      addRequests(createRequest2)
+    }.build()
+
+    val mockedCmmsEg1 = createCmmsEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, BATCH_EVENT_GROUP_REF_ID_1)
+    val mockedCmmsEg2 = createCmmsEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_2, BATCH_EVENT_GROUP_REF_ID_2)
+
+    whenever(cmmsEventGroupsStubMock.createEventGroup(argThat { eventGroup.eventGroupReferenceId == BATCH_EVENT_GROUP_REF_ID_1 }))
+      .thenReturn(mockedCmmsEg1)
+    whenever(cmmsEventGroupsStubMock.createEventGroup(argThat { eventGroup.eventGroupReferenceId == BATCH_EVENT_GROUP_REF_ID_2 }))
+      .thenReturn(mockedCmmsEg2)
+
+    val response = service.batchCreateEventGroups(batchRequest)
+
+    assertThat(response.eventGroupsCount).isEqualTo(2)
+    assertThat(response.eventGroupsList[0].name).isEqualTo(BATCH_PUBLIC_EVENT_GROUP_NAME_1)
+    assertThat(response.eventGroupsList[0].eventGroupReferenceId).isEqualTo(BATCH_EVENT_GROUP_REF_ID_1)
+    assertThat(response.eventGroupsList[1].name).isEqualTo(BATCH_PUBLIC_EVENT_GROUP_NAME_2)
+    assertThat(response.eventGroupsList[1].eventGroupReferenceId).isEqualTo(BATCH_EVENT_GROUP_REF_ID_2)
+
+    verify(authorizationClientMock).check(MC_PARENT_RESOURCE_NAME, EventGroupsService.CREATE_EVENT_GROUP_PERMISSIONS)
+    verify(cmmsEventGroupsStubMock, times(2)).createEventGroup(any())
+  }
+
+  @Test
+  fun `batchCreateEventGroups with metadata success`() = runBlocking {
+      val metadataAny = ProtoAny.newBuilder().setValue(ByteString.copyFromUtf8("test_metadata_value_batch")).build()
+      val publicMetadata = EventGroupKt.metadata {
+          eventGroupMetadataDescriptor = "some_descriptor_batch"
+          metadata = metadataAny
+      }
+      val createRequest1 = CreateEventGroupRequest.newBuilder().apply {
+          parent = MC_PARENT_RESOURCE_NAME
+          eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, BATCH_EVENT_GROUP_REF_ID_1, metadata = publicMetadata)
+          requestId = "req_meta_batch_1"
+      }.build()
+      val batchRequest = BatchCreateEventGroupsRequest.newBuilder().apply {
+          parent = MC_PARENT_RESOURCE_NAME
+          addRequests(createRequest1)
+      }.build()
+
+      val mockedCmmsEg1 = createCmmsEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, BATCH_EVENT_GROUP_REF_ID_1).copy {
+          encryptedMetadata = ByteString.copyFromUtf8("encrypted_metadata_placeholder_batch")
+          measurementConsumerPublicKey = ENCRYPTION_PUBLIC_KEY_FROM_CONFIG
+      }
+
+      lenient().whenever(encryptionKeyPairStoreMock.getPrivateKeyHandle(any(), eq(ENCRYPTION_PUBLIC_KEY_FROM_CONFIG.data))).thenReturn(ENCRYPTION_PRIVATE_KEY_FOR_TESTS)
+
+
+      whenever(cmmsEventGroupsStubMock.createEventGroup(any()))
+          .thenReturn(mockedCmmsEg1)
+
+      val response = service.batchCreateEventGroups(batchRequest)
+      assertThat(response.eventGroupsCount).isEqualTo(1)
+      assertThat(response.eventGroupsList[0].name).isEqualTo(BATCH_PUBLIC_EVENT_GROUP_NAME_1)
+
+      val captor = argumentCaptor<CmmsEventGroup.CreateEventGroupRequest>()
+      verify(cmmsEventGroupsStubMock).createEventGroup(captor.capture())
+      assertThat(captor.firstValue.eventGroup.hasEncryptedMetadata()).isTrue()
+      assertThat(captor.firstValue.eventGroup.hasMeasurementConsumerPublicKey()).isTrue()
+      assertThat(captor.firstValue.eventGroup.measurementConsumerPublicKey).isEqualTo(ENCRYPTION_PUBLIC_KEY_FROM_CONFIG)
+  }
+
+
+  @Test
+  fun `batchCreateEventGroups partial success one fails`() = runBlocking {
+    val createRequest1 = CreateEventGroupRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, BATCH_EVENT_GROUP_REF_ID_1)
+    }.build()
+    val createRequest2 = CreateEventGroupRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_2, BATCH_EVENT_GROUP_REF_ID_2)
+    }.build()
+
+     val batchRequest = BatchCreateEventGroupsRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      addRequests(createRequest1)
+      addRequests(createRequest2)
+    }.build()
+
+    val mockedCmmsEg1 = createCmmsEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, BATCH_EVENT_GROUP_REF_ID_1)
+    whenever(cmmsEventGroupsStubMock.createEventGroup(argThat { eventGroup.eventGroupReferenceId == BATCH_EVENT_GROUP_REF_ID_1 }))
+      .thenReturn(mockedCmmsEg1)
+    whenever(cmmsEventGroupsStubMock.createEventGroup(argThat { eventGroup.eventGroupReferenceId == BATCH_EVENT_GROUP_REF_ID_2 }))
+      .thenThrow(Status.INVALID_ARGUMENT.withDescription("CMMS error batch").asRuntimeException())
+
+    val response = service.batchCreateEventGroups(batchRequest)
+
+    assertThat(response.eventGroupsCount).isEqualTo(1)
+    assertThat(response.eventGroupsList[0].name).isEqualTo(BATCH_PUBLIC_EVENT_GROUP_NAME_1)
+  }
+
+  @Test
+  fun `batchCreateEventGroups fails on authorization error`() = runBlocking {
+    whenever(authorizationClientMock.check(any(), any()))
+      .thenThrow(Status.PERMISSION_DENIED.asRuntimeException())
+
+    val batchRequest = BatchCreateEventGroupsRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      addRequests(CreateEventGroupRequest.newBuilder().setParent(MC_PARENT_RESOURCE_NAME).setEventGroup(createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, BATCH_EVENT_GROUP_REF_ID_1)))
+    }.build()
+
+    val exception = assertFailsWith<StatusRuntimeException> {
+      service.batchCreateEventGroups(batchRequest)
+    }
+    assertThat(exception.status.code).isEqualTo(Status.Code.PERMISSION_DENIED)
+  }
+
+  @Test
+  fun `batchCreateEventGroups fails with invalid parent format`() = runBlocking {
+    val batchRequest = BatchCreateEventGroupsRequest.newBuilder().apply {
+      parent = "invalid_parent_format_batch"
+      addRequests(CreateEventGroupRequest.newBuilder().setParent("invalid_parent_format_batch").setEventGroup(eventGroup{eventGroupReferenceId = "foo"}))
+    }.build()
+
+    val exception = assertFailsWith<StatusRuntimeException> {
+        service.batchCreateEventGroups(batchRequest)
+    }
+    assertThat(exception.status.code).isEqualTo(Status.Code.INVALID_ARGUMENT)
+    assertThat(exception.message).contains("Parent is either unspecified or invalid")
+  }
+
+   @Test
+  fun `batchCreateEventGroups empty requests list returns empty response`() = runBlocking {
+    val batchRequest = BatchCreateEventGroupsRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+    }.build()
+    val response = service.batchCreateEventGroups(batchRequest)
+    assertThat(response.eventGroupsCount).isEqualTo(0)
+    verify(cmmsEventGroupsStubMock, times(0)).createEventGroup(any())
+  }
+
+  @Test
+  fun `batchUpdateEventGroups success updates multiple event groups`() = runBlocking {
+    val updateRequest1 = UpdateEventGroupRequest.newBuilder().apply {
+      eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, "new_" + BATCH_EVENT_GROUP_REF_ID_1)
+    }.build()
+    val updateRequest2 = UpdateEventGroupRequest.newBuilder().apply {
+      eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_2, "new_" + BATCH_EVENT_GROUP_REF_ID_2)
+    }.build()
+
+    val batchRequest = BatchUpdateEventGroupsRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      addRequests(updateRequest1)
+      addRequests(updateRequest2)
+    }.build()
+
+    val mockedCmmsEg1 = createCmmsEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, "new_" + BATCH_EVENT_GROUP_REF_ID_1)
+    val mockedCmmsEg2 = createCmmsEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_2, "new_" + BATCH_EVENT_GROUP_REF_ID_2)
+
+    whenever(cmmsEventGroupsStubMock.updateEventGroup(argThat { eventGroup.name == BATCH_CMMS_EVENT_GROUP_KEY_1.toName() }))
+      .thenReturn(mockedCmmsEg1)
+    whenever(cmmsEventGroupsStubMock.updateEventGroup(argThat { eventGroup.name == BATCH_CMMS_EVENT_GROUP_KEY_2.toName() }))
+      .thenReturn(mockedCmmsEg2)
+
+    val response = service.batchUpdateEventGroups(batchRequest)
+
+    assertThat(response.eventGroupsCount).isEqualTo(2)
+    assertThat(response.eventGroupsList[0].eventGroupReferenceId).isEqualTo("new_" + BATCH_EVENT_GROUP_REF_ID_1)
+    assertThat(response.eventGroupsList[1].eventGroupReferenceId).isEqualTo("new_" + BATCH_EVENT_GROUP_REF_ID_2)
+
+    verify(authorizationClientMock).check(MC_PARENT_RESOURCE_NAME, EventGroupsService.UPDATE_EVENT_GROUP_PERMISSIONS)
+    verify(cmmsEventGroupsStubMock, times(2)).updateEventGroup(any())
+  }
+
+  @Test
+  fun `batchUpdateEventGroups with field mask updates specific fields`() = runBlocking {
+    val newRefId = "updated_ref_id_masked_batch"
+    val updateRequest1 = UpdateEventGroupRequest.newBuilder().apply {
+      eventGroup = createPublicEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, newRefId).copy {
+        addMediaTypes(EventGroup.MediaType.DISPLAY)
+      }
+      updateMask = FieldMask.newBuilder().addPaths("event_group_reference_id").build()
+    }.build()
+
+    val batchRequest = BatchUpdateEventGroupsRequest.newBuilder().apply {
+      parent = MC_PARENT_RESOURCE_NAME
+      addRequests(updateRequest1)
+    }.build()
+
+    val mockedCmmsEg1 = createCmmsEventGroupForBatchTest(BATCH_EVENT_GROUP_ID_1, newRefId)
+    whenever(cmmsEventGroupsStubMock.updateEventGroup(any())).thenReturn(mockedCmmsEg1)
+
+    service.batchUpdateEventGroups(batchRequest)
+
+    val cmmsRequestCaptor = argumentCaptor<CmmsEventGroup.UpdateEventGroupRequest>()
+    verify(cmmsEventGroupsStubMock).updateEventGroup(cmmsRequestCaptor.capture())
+
+    val capturedCmmsEventGroup = cmmsRequestCaptor.firstValue.eventGroup
+    assertThat(capturedCmmsEventGroup.eventGroupReferenceId).isEqualTo(newRefId)
+    assertThat(capturedCmmsEventGroup.mediaTypesList).isEmpty()
+  }
+
+  @Test
+  fun `batchUpdateEventGroups fails with mismatched parent in event group name`() = runBlocking {
+    val mischievousEgName = EventGroupKey("other_mc_batch", BATCH_EVENT_GROUP_ID_1).toName()
+    val updateRequest = UpdateEventGroupRequest.newBuilder().apply {
+        eventGroup = eventGroup {
+            name = mischievousEgName
+            cmmsEventGroup = CmmsEventGroupKey("other_mc_batch", BATCH_TEST_DP_ID, BATCH_EVENT_GROUP_ID_1).toName()
+            eventGroupReferenceId = "ref_batch"
+        }
+    }.build()
+    val batchRequest = BatchUpdateEventGroupsRequest.newBuilder().apply {
+        parent = MC_PARENT_RESOURCE_NAME
+        addRequests(updateRequest)
+    }.build()
+
+    val exception = assertFailsWith<StatusRuntimeException> {
+        service.batchUpdateEventGroups(batchRequest)
+    }
+    assertThat(exception.status.code).isEqualTo(Status.Code.INVALID_ARGUMENT)
+    assertThat(exception.message).contains("Parent in EventGroup name must match parent")
+  }
+
+
   companion object {
+    // Constants for original listEventGroups tests
     private const val DEFAULT_PAGE_SIZE = 50
     private const val MAX_PAGE_SIZE = 1000
 
-    private const val API_AUTHENTICATION_KEY = "nR5QPN7ptx"
-    private val CONFIG = measurementConsumerConfig { apiKey = API_AUTHENTICATION_KEY }
-    private const val MEASUREMENT_CONSUMER_ID = "1234"
-    private val MEASUREMENT_CONSUMER_NAME = MeasurementConsumerKey(MEASUREMENT_CONSUMER_ID).toName()
+    private const val API_AUTHENTICATION_KEY_FOR_LIST_TESTS = "nR5QPN7ptx_list"
+    private val CONFIG_FOR_LIST_TESTS = org.wfanet.measurement.config.reporting.measurementConsumerConfig { apiKey = API_AUTHENTICATION_KEY_FOR_LIST_TESTS }
+    private const val MEASUREMENT_CONSUMER_ID_FOR_LIST_TESTS = "1234_list"
+    private val MEASUREMENT_CONSUMER_NAME_FOR_LIST_TESTS = MeasurementConsumerKey(MEASUREMENT_CONSUMER_ID_FOR_LIST_TESTS).toName()
     private val MEASUREMENT_CONSUMER_CONFIGS = measurementConsumerConfigs {
-      configs[MEASUREMENT_CONSUMER_NAME] = CONFIG
+      configs[MEASUREMENT_CONSUMER_NAME_FOR_LIST_TESTS] = CONFIG_FOR_LIST_TESTS
     }
-    private val PRINCIPAL = principal { name = "principals/${MEASUREMENT_CONSUMER_ID}-user" }
+    private val PRINCIPAL = principal { name = "principals/${MEASUREMENT_CONSUMER_ID_FOR_LIST_TESTS}-user" }
     private val SCOPES = EventGroupsService.LIST_EVENT_GROUPS_PERMISSIONS
 
     private val SECRET_FILES_PATH: Path =
@@ -837,20 +1179,20 @@ class EventGroupsServiceTest {
           Paths.get("wfa_measurement_system", "src", "main", "k8s", "testing", "secretfiles")
         )
       )
-    private val ENCRYPTION_PRIVATE_KEY =
+    private val ENCRYPTION_PRIVATE_KEY_FOR_TESTS = // Renamed for clarity
       loadPrivateKey(SECRET_FILES_PATH.resolve("mc_enc_private.tink").toFile())
-    private val ENCRYPTION_PUBLIC_KEY =
+    private val ENCRYPTION_PUBLIC_KEY_FOR_TESTS = // Renamed for clarity
       loadPublicKey(SECRET_FILES_PATH.resolve("mc_enc_public.tink").toFile())
     private val ENCRYPTION_KEY_PAIR_STORE =
       InMemoryEncryptionKeyPairStore(
         mapOf(
-          MEASUREMENT_CONSUMER_NAME to
-            listOf(ENCRYPTION_PUBLIC_KEY.toByteString() to ENCRYPTION_PRIVATE_KEY)
+          MEASUREMENT_CONSUMER_NAME_FOR_LIST_TESTS to // Use specific MC name for these keys
+            listOf(ENCRYPTION_PUBLIC_KEY_FOR_TESTS.toByteString() to ENCRYPTION_PRIVATE_KEY_FOR_TESTS)
         )
       )
 
-    private const val DATA_PROVIDER_ID = "1235"
-    private val DATA_PROVIDER_NAME = DataProviderKey(DATA_PROVIDER_ID).toName()
+    private const val DATA_PROVIDER_ID_FOR_LIST_TESTS = "1235_list"
+    private val DATA_PROVIDER_NAME_FOR_LIST_TESTS = DataProviderKey(DATA_PROVIDER_ID_FOR_LIST_TESTS).toName()
 
     private val TEST_MESSAGE = testMetadataMessage { publisherId = 15 }
     private val EVENT_GROUP_METADATA_DESCRIPTOR_NAME =

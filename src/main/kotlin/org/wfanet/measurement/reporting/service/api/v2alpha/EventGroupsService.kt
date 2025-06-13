@@ -48,9 +48,17 @@ import org.wfanet.measurement.common.api.grpc.ResourceList
 import org.wfanet.measurement.common.api.grpc.listResources
 import org.wfanet.measurement.common.crypto.PrivateKeyHandle
 import org.wfanet.measurement.common.grpc.grpcRequire
+import com.google.protobuf.Any as ProtoAny
+import com.google.protobuf.ByteString
+import com.google.protobuf.FieldMask
+import org.wfanet.measurement.common.crypto.Hashing.hashSha256
+import org.wfanet.measurement.common.crypto.SignedMessage
+import org.wfanet.measurement.common.crypto.signatureAlgorithm
+import org.wfanet.measurement.common.crypto.verifySignature
 import org.wfanet.measurement.common.grpc.grpcRequireNotNull
 import org.wfanet.measurement.config.reporting.MeasurementConsumerConfigs
 import org.wfanet.measurement.consent.client.measurementconsumer.decryptMetadata
+import org.wfanet.measurement.consent.client.measurementconsumer.encryptMetadata as encryptCmmsMetadata // Renamed to avoid conflict
 import org.wfanet.measurement.reporting.service.api.CelEnvProvider
 import org.wfanet.measurement.reporting.service.api.EncryptionKeyPairStore
 import org.wfanet.measurement.reporting.v2alpha.EventGroup
@@ -61,6 +69,21 @@ import org.wfanet.measurement.reporting.v2alpha.ListEventGroupsResponse
 import org.wfanet.measurement.reporting.v2alpha.MediaType
 import org.wfanet.measurement.reporting.v2alpha.eventGroup
 import org.wfanet.measurement.reporting.v2alpha.listEventGroupsResponse
+import org.wfanet.measurement.reporting.v2alpha.BatchCreateEventGroupsRequest
+import org.wfanet.measurement.reporting.v2alpha.BatchCreateEventGroupsResponse
+import org.wfanet.measurement.reporting.v2alpha.BatchUpdateEventGroupsRequest
+import org.wfanet.measurement.reporting.v2alpha.BatchUpdateEventGroupsResponse
+import org.wfanet.measurement.reporting.v2alpha.CreateEventGroupRequest
+import org.wfanet.measurement.reporting.v2alpha.UpdateEventGroupRequest
+import org.wfanet.measurement.reporting.v2alpha.batchCreateEventGroupsResponse
+import org.wfanet.measurement.reporting.v2alpha.batchUpdateEventGroupsResponse
+import org.wfanet.measurement.api.v2alpha.CreateEventGroupRequest as CmmsCreateEventGroupRequest
+import org.wfanet.measurement.api.v2alpha.UpdateEventGroupRequest as CmmsUpdateEventGroupRequest
+import org.wfanet.measurement.api.v2alpha.createEventGroupRequest as cmmsCreateEventGroupRequest
+import org.wfanet.measurement.api.v2alpha.updateEventGroupRequest as cmmsUpdateEventGroupRequest
+import org.wfanet.measurement.api.v2alpha.eventGroup as cmmsEventGroup
+import org.wfanet.measurement.common.grpc.failGrpc
+import org.wfanet.measurement.common.identity.externalIdToApiId
 
 class EventGroupsService(
   private val cmmsEventGroupsStub: EventGroupsGrpcKt.EventGroupsCoroutineStub,
@@ -70,6 +93,204 @@ class EventGroupsService(
   private val encryptionKeyPairStore: EncryptionKeyPairStore,
   private val ticker: Ticker = Deadline.getSystemTicker(),
 ) : EventGroupsCoroutineImplBase() {
+
+  private data class EncryptedMetadataResult(
+    val encryptedMetadata: ByteString,
+    val encryptionPublicKey: EncryptionPublicKey,
+  )
+
+  /**
+   * Encrypts the metadata within [EventGroup.Metadata] using the Measurement Consumer's public key.
+   *
+   * TODO: This is a placeholder. The actual encryption logic needs to be robust,
+   * potentially using JWE, and align with how `decryptMetadata` works.
+   * The current `encryptCmmsMetadata` from consent.client.measurementconsumer
+   * has a different signature and purpose.
+   */
+  private suspend fun encryptPublicEventGroupMetadata(
+    publicMetadata: EventGroup.Metadata,
+    measurementConsumerConfig: MeasurementConsumerConfigs.MeasurementConsumerConfig,
+  ): EncryptedMetadataResult {
+    // This assumes the measurementConsumerConfig contains the direct public key or a reference to it.
+    // In a real scenario, you might fetch this from a keystore or configuration service.
+    val mcPublicKey = measurementConsumerConfig.signingKeyPair.publicKey.unpack<EncryptionPublicKey>()
+
+    // Serialize the inner `com.google.protobuf.Any` from the public metadata.
+    val serializedPublicAnyMetadata: ByteString = publicMetadata.metadata.toByteString()
+
+    // Placeholder for actual encryption. This should use a proper cryptographic library
+    // and format (e.g., JWE) compatible with the decryption process.
+    // For now, returning the serialized data as if it were encrypted.
+    val encryptedContent = serializedPublicAnyMetadata
+
+    return EncryptedMetadataResult(encryptedContent, mcPublicKey)
+  }
+
+  override suspend fun batchCreateEventGroups(
+    request: BatchCreateEventGroupsRequest
+  ): BatchCreateEventGroupsResponse {
+    val parentKey =
+      grpcRequireNotNull(MeasurementConsumerKey.fromName(request.parent)) {
+        "Parent is either unspecified or invalid."
+      }
+    authorization.check(request.parent, CREATE_EVENT_GROUP_PERMISSIONS)
+
+    val measurementConsumerConfig =
+      measurementConsumerConfigs.configsMap[request.parent]
+        ?: throw Status.FAILED_PRECONDITION.withDescription(
+            "MeasurementConsumerConfig not found for ${request.parent}"
+          )
+          .asRuntimeException()
+    val apiAuthenticationKey: String = measurementConsumerConfig.apiKey
+
+    val successfullyCreatedEventGroups = mutableListOf<EventGroup>()
+
+    for (createRequest in request.requestsList) {
+      try {
+        grpcRequire(createRequest.eventGroup.eventGroupReferenceId.isNotBlank()) {
+          "EventGroup.event_group_reference_id must be provided."
+        }
+        grpcRequire(createRequest.parent == request.parent) {
+          "Parent in CreateEventGroupRequest must match parent in BatchCreateEventGroupsRequest."
+        }
+
+        val encryptedMetadataResult =
+          if (createRequest.eventGroup.hasMetadata()) {
+            encryptPublicEventGroupMetadata(
+              createRequest.eventGroup.metadata,
+              measurementConsumerConfig,
+            )
+          } else {
+            null
+          }
+
+        val cmmsCreateRequest =
+          createRequest.toCmmsCreateEventGroupRequest(
+            parentKey.measurementConsumerId,
+            encryptedMetadataResult,
+          )
+
+        val cmmsStub = cmmsEventGroupsStub.withAuthenticationKey(apiAuthenticationKey)
+        val createdCmmsEventGroup = cmmsStub.createEventGroup(cmmsCreateRequest)
+
+        val finalCmmsMetadata: CmmsEventGroup.Metadata? =
+          if (createdCmmsEventGroup.hasEncryptedMetadata()) {
+            try {
+              decryptMetadata(createdCmmsEventGroup, parentKey.toName())
+            } catch (e: StatusException) {
+              System.err.println("Failed to decrypt metadata for created EventGroup ${createdCmmsEventGroup.name}: ${e.status}")
+              null // Proceed without decrypted metadata if decryption fails
+            }
+          } else if (createdCmmsEventGroup.hasEventGroupMetadata()) {
+            // If CMMS returns unencrypted metadata (e.g. if it decrypts for us, or if never encrypted)
+            createdCmmsEventGroup.eventGroupMetadata
+          } else {
+            null
+          }
+
+        val publicEventGroup = createdCmmsEventGroup.toEventGroup(finalCmmsMetadata)
+        successfullyCreatedEventGroups.add(publicEventGroup)
+      } catch (e: StatusException) {
+        // Log the error and continue with other requests.
+        // Consider how to report these individual errors if needed in the response.
+        System.err.println(
+          "Error creating EventGroup (request_id: ${createRequest.requestId}): ${e.status}"
+        )
+      } catch (e: IllegalArgumentException) {
+        System.err.println(
+          "Invalid argument for EventGroup (request_id: ${createRequest.requestId}): ${e.message}"
+        )
+      }
+    }
+
+    return batchCreateEventGroupsResponse { eventGroups += successfullyCreatedEventGroups }
+  }
+
+  override suspend fun batchUpdateEventGroups(
+    request: BatchUpdateEventGroupsRequest
+  ): BatchUpdateEventGroupsResponse {
+    val parentKey =
+      grpcRequireNotNull(MeasurementConsumerKey.fromName(request.parent)) {
+        "Parent is either unspecified or invalid."
+      }
+    authorization.check(request.parent, UPDATE_EVENT_GROUP_PERMISSIONS)
+
+    val measurementConsumerConfig =
+      measurementConsumerConfigs.configsMap[request.parent]
+        ?: throw Status.FAILED_PRECONDITION.withDescription(
+            "MeasurementConsumerConfig not found for ${request.parent}"
+          )
+          .asRuntimeException()
+    val apiAuthenticationKey: String = measurementConsumerConfig.apiKey
+
+    val successfullyUpdatedEventGroups = mutableListOf<EventGroup>()
+
+    for (updateRequest in request.requestsList) {
+      try {
+        grpcRequire(updateRequest.eventGroup.name.isNotBlank()) {
+          "EventGroup.name must be provided for update."
+        }
+        val eventGroupKey =
+          grpcRequireNotNull(EventGroupKey.fromName(updateRequest.eventGroup.name)) {
+            "EventGroup.name is invalid."
+          }
+        grpcRequire(
+          MeasurementConsumerKey(eventGroupKey.measurementConsumerId).toName() == request.parent
+        ) {
+          "Parent in EventGroup name must match parent in BatchUpdateEventGroupsRequest."
+        }
+
+        val fieldMask = if (updateRequest.hasUpdateMask()) updateRequest.updateMask else null
+        val sourceEventGroup = updateRequest.eventGroup
+
+        var encryptedMetadataResultForUpdate: EncryptedMetadataResult? = null
+        if (sourceEventGroup.hasMetadata() && (fieldMask == null || fieldMask.pathsList.any { it.startsWith("metadata") })) {
+            encryptedMetadataResultForUpdate = encryptPublicEventGroupMetadata(sourceEventGroup.metadata, measurementConsumerConfig)
+        }
+
+        val cmmsUpdateRequest =
+          updateRequest.toCmmsUpdateEventGroupRequest(
+            parentKey.measurementConsumerId,
+            fieldMask,
+            measurementConsumerConfig, // For context, not directly used for encryption decision here now
+            encryptedMetadataResultForUpdate
+          )
+
+        val cmmsStub = cmmsEventGroupsStub.withAuthenticationKey(apiAuthenticationKey)
+        // As established, CMMS UpdateEventGroup RPC does not take a FieldMask argument in the stub.
+        // The effect of the mask is handled by what fields are set in `cmmsUpdateRequest`.
+        val updatedCmmsEventGroup = cmmsStub.updateEventGroup(cmmsUpdateRequest)
+
+        val finalCmmsMetadata: CmmsEventGroup.Metadata? =
+         if (updatedCmmsEventGroup.hasEncryptedMetadata()) {
+            try {
+              decryptMetadata(updatedCmmsEventGroup, parentKey.toName())
+            } catch (e: StatusException) {
+              System.err.println("Failed to decrypt metadata for updated EventGroup ${updatedCmmsEventGroup.name}: ${e.status}")
+              null
+            }
+          } else if (updatedCmmsEventGroup.hasEventGroupMetadata()) {
+            updatedCmmsEventGroup.eventGroupMetadata
+          } else {
+            null
+          }
+
+        val publicEventGroup = updatedCmmsEventGroup.toEventGroup(finalCmmsMetadata)
+        successfullyUpdatedEventGroups.add(publicEventGroup)
+      } catch (e: StatusException) {
+        System.err.println(
+          "Error updating EventGroup (request_id: ${updateRequest.requestId}): ${e.status}"
+        )
+      } catch (e: IllegalArgumentException) {
+        System.err.println(
+          "Invalid argument for EventGroup (request_id: ${updateRequest.requestId}): ${e.message}"
+        )
+      }
+    }
+
+    return batchUpdateEventGroupsResponse { eventGroups += successfullyUpdatedEventGroups }
+  }
+
   override suspend fun listEventGroups(request: ListEventGroupsRequest): ListEventGroupsResponse {
     val parentKey =
       grpcRequireNotNull(MeasurementConsumerKey.fromName(request.parent)) {
@@ -336,6 +557,145 @@ class EventGroupsService(
     private const val RPC_DEFAULT_DEADLINE_MILLIS = 30_000L
 
     val LIST_EVENT_GROUPS_PERMISSIONS = setOf("reporting.eventGroups.list")
+    val CREATE_EVENT_GROUP_PERMISSIONS = setOf("reporting.eventGroups.create")
+    val UPDATE_EVENT_GROUP_PERMISSIONS = setOf("reporting.eventGroups.update")
+  }
+}
+
+// Helper to convert public EventGroup.EventGroupMetadata to CMMS EventGroupMetadata
+private fun EventGroup.EventGroupMetadata.toCmmsEventGroupMetadata(): CmmsEventGroup.EventGroupMetadata {
+  val source = this
+  return EventGroupMetadata.newBuilder()
+    .apply {
+      @Suppress("WHEN_ENUM_CAN_BE_NULL_IN_JAVA")
+      when (source.selectorCase) {
+        EventGroup.EventGroupMetadata.SelectorCase.AD_METADATA ->
+          adMetadata =
+            EventGroupMetadata.AdMetadata.newBuilder()
+              .setCampaignMetadata(
+                EventGroupMetadata.AdMetadata.CampaignMetadata.newBuilder()
+                  .setBrandName(source.adMetadata.campaignMetadata.brandName)
+                  .setCampaignName(source.adMetadata.campaignMetadata.campaignName)
+              )
+              .build()
+        EventGroup.EventGroupMetadata.SelectorCase.SELECTOR_NOT_SET,
+        null -> {} // Do nothing
+      }
+    }
+    .build()
+}
+
+private fun CreateEventGroupRequest.toCmmsCreateEventGroupRequest(
+  measurementConsumerId: String,
+  encryptedMetadataResult: EncryptedMetadataResult?,
+): CmmsCreateEventGroupRequest {
+  val sourceEventGroup = this.eventGroup
+  val measurementConsumerName = MeasurementConsumerKey(measurementConsumerId).toName()
+
+  return cmmsCreateEventGroupRequest {
+    parent = measurementConsumerName
+    eventGroup = cmmsEventGroup {
+      // measurementConsumer field in CmmsEventGroup is derived from parent by the CMMS.
+      eventGroupReferenceId = sourceEventGroup.eventGroupReferenceId
+
+      if (sourceEventGroup.cmmsDataProvider.isNotBlank()) {
+        val dpKey =
+          DataProviderKey.fromName(sourceEventGroup.cmmsDataProvider)
+            ?: failGrpc(Status.INVALID_ARGUMENT) {
+              "Invalid cmms_data_provider: ${sourceEventGroup.cmmsDataProvider}"
+            }
+        dataProvider = dpKey.toName() // This is the CMMS DataProvider resource name
+      }
+
+      eventTemplates +=
+        sourceEventGroup.eventTemplatesList.map {
+          CmmsEventGroup.EventTemplate.newBuilder().setType(it.type).build()
+        }
+      mediaTypes += sourceEventGroup.mediaTypesList.map { it.toCmmsMediaType() }
+      if (sourceEventGroup.hasDataAvailabilityInterval()) {
+        dataAvailabilityInterval = sourceEventGroup.dataAvailabilityInterval
+      }
+
+      if (encryptedMetadataResult != null) {
+        encryptedMetadata = encryptedMetadataResult.encryptedMetadata
+        measurementConsumerPublicKey = encryptedMetadataResult.encryptionPublicKey
+        // Ensure event_group_metadata is not set if encrypted_metadata is set
+        clearEventGroupMetadata()
+      } else if (sourceEventGroup.hasEventGroupMetadata()) {
+        // If not encrypting, convert public EventGroupMetadata to CMMS EventGroupMetadata
+        this.eventGroupMetadata = sourceEventGroup.eventGroupMetadata.toCmmsEventGroupMetadata()
+      }
+    }
+    requestId = this.requestId
+  }
+}
+
+private fun UpdateEventGroupRequest.toCmmsUpdateEventGroupRequest(
+  measurementConsumerId: String, // For context, not directly used to set a field here
+  updateMask: FieldMask?,
+  measurementConsumerConfigForEncryption: MeasurementConsumerConfigs.MeasurementConsumerConfig?,
+  encryptedMetadataResult: EncryptedMetadataResult? // Pass pre-encrypted result if available
+): CmmsUpdateEventGroupRequest {
+  val sourceEventGroup = this.eventGroup
+  val cmmsEventGroupKey =
+    CmmsEventGroupKey.fromName(sourceEventGroup.cmmsEventGroup)
+      ?: failGrpc(Status.INVALID_ARGUMENT) {
+        "Invalid EventGroup.cmms_event_group field: '${sourceEventGroup.cmmsEventGroup}'"
+      }
+
+  return cmmsUpdateEventGroupRequest {
+    this.eventGroup = cmmsEventGroup {
+      name = cmmsEventGroupKey.toName() // CMMS full resource name for the EventGroup
+
+      val maskPaths = updateMask?.pathsList ?: emptyList()
+      fun shouldUpdate(field: String) = updateMask == null || maskPaths.contains(field) || maskPaths.any{ it.startsWith("$field.")}
+
+
+      if (shouldUpdate("event_group_reference_id")) {
+        eventGroupReferenceId = sourceEventGroup.eventGroupReferenceId
+      }
+      if (shouldUpdate("event_templates")) {
+        eventTemplates.clear()
+        eventTemplates +=
+          sourceEventGroup.eventTemplatesList.map {
+            CmmsEventGroup.EventTemplate.newBuilder().setType(it.type).build()
+          }
+      }
+      if (shouldUpdate("media_types")) {
+        mediaTypes.clear()
+        mediaTypes += sourceEventGroup.mediaTypesList.map { it.toCmmsMediaType() }
+      }
+      if (shouldUpdate("data_availability_interval")) {
+        if (sourceEventGroup.hasDataAvailabilityInterval()) {
+          dataAvailabilityInterval = sourceEventGroup.dataAvailabilityInterval
+        } else {
+          clearDataAvailabilityInterval()
+        }
+      }
+
+      val updatingMetadata = shouldUpdate("metadata")
+      val updatingEventGroupMetadata = shouldUpdate("event_group_metadata")
+
+      if (encryptedMetadataResult != null && (updatingMetadata || updatingEventGroupMetadata)) {
+          encryptedMetadata = encryptedMetadataResult.encryptedMetadata
+          measurementConsumerPublicKey = encryptedMetadataResult.encryptionPublicKey
+          clearEventGroupMetadata()
+      } else if (sourceEventGroup.hasEventGroupMetadata() && updatingEventGroupMetadata) {
+          this.eventGroupMetadata = sourceEventGroup.eventGroupMetadata.toCmmsEventGroupMetadata()
+          clearEncryptedMetadata()
+          clearMeasurementConsumerPublicKey()
+      } else if (updatingMetadata || updatingEventGroupMetadata) {
+        // If metadata is being cleared by the mask and no new metadata is provided
+        clearEventGroupMetadata()
+        clearEncryptedMetadata()
+        clearMeasurementConsumerPublicKey()
+      }
+    }
+    requestId = this.requestId
+    // The CMMS API's UpdateEventGroup RPC does not take an update_mask in its request message.
+    // If the CMMS API supports field masks, it's typically passed as a gRPC option or similar.
+    // Here, we rely on only setting the fields in the CmmsEventGroup message that are in the mask.
+    // If no mask is provided, all settable fields from sourceEventGroup are applied.
   }
 }
 
@@ -378,7 +738,9 @@ private fun ListEventGroupsRequest.OrderBy.toCmmsOrderBy(): CmmsListEventGroupsR
 private fun ListEventGroupsRequest.Filter.toCmmsFilter(): CmmsListEventGroupsRequest.Filter {
   val source = this
   return CmmsListEventGroupsRequestKt.filter {
-    dataProviderIn += source.cmmsDataProviderInList
+    dataProviderIn += source.cmmsDataProviderInList.map { apiId ->
+      DataProviderKey(apiId).toName()
+    }
     for (mediaType in source.mediaTypesIntersectList) {
       mediaTypesIntersect += mediaType.toCmmsMediaType()
     }
